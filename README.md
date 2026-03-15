@@ -1,96 +1,124 @@
-# shvirtd-example-python
+# Решение домашнего задания. «Практическое применение Docker»
 
-Учебный проект FastAPI-приложения для изучения Docker Compose.
+## Выполненные задачи
 
-## Описание проекта
-
-Это простое веб-приложение на FastAPI, предназначенное для изучения контейнеризации и работы с Docker Compose. Приложение демонстрирует:
-
-- Создание веб-сервиса на FastAPI
-- Подключение к базе данных MySQL
-- Работу с прокси-серверами (Nginx → HAProxy → FastAPI)
-- Корректную настройку сетей Docker
-- Передачу IP-адресов через заголовки прокси
-
-### Функциональность
-
-При обращении к главной странице приложение:
-1. Определяет IP-адрес клиента
-2. Записывает время запроса и IP-адрес в базу данных MySQL
-3. Возвращает эту информацию пользователю
-
-**Важно для обучения:** Если обращаться к приложению напрямую (минуя прокси), вы получите подсказку о неправильном выполнении задания.
-
-## Способы запуска
-
-### 1. Запуск через Docker Compose
-
-**Архитектура при запуске через Docker Compose:**
-```
-Клиент → Nginx (8090) → HAProxy (8080) → FastAPI App (5000) → MySQL
-```
-
-### 2. Локальный запуск для разработки
+### Задача 0: Проверка Docker Compose
 
 ```bash
-# Создайте виртуальное окружение
-python3 -m venv venv
-source venv/bin/activate  # в Windows: venv\Scripts\activate
-
-# Установите зависимости
-pip install -r requirements.txt
-
-# Настройте переменные окружения для подключения к БД(не забудьте отдельно запустить БД)
-export DB_HOST='127.0.0.1'
-export DB_USER='app'  
-export DB_PASSWORD='very_strong'
-export DB_NAME='example'
-
-# Запустите приложение
-uvicorn main:app --host 0.0.0.0 --port 5000 --reload
+$ docker compose version
+Docker Compose version v5.0.2
 ```
 
-**Требования для локального запуска:**
-- Python 3.12+
-- Запущенный сервер MySQL
-- База данных и пользователь, настроенные согласно переменным окружения
+✅ Проверено локально на macOS
 
-## Настройка базы данных MySQL
+
+### Задача 1: Создание Dockerfile.python
+
+Файлы добавлены в репозиторий:
+
+Dockerfile.python — multi-stage сборка на базе python:3.12-slim
+.dockerignore — исключения для контекста сборки
+
+Особенности:
+Используется multi-stage build (builder + production)
+Размер образа: ~102 MB
+Непривилегированный пользователь appuser
+Проверка работы: docker build -f Dockerfile.python -t myapp:latest .
+
+### Задача 3: Docker Compose
+
+Файл compose.yaml с использованием include: proxy.yaml
+Сервисы:
+
+web — сборка из Dockerfile.python, IP 172.20.0.5
+db — mysql:8, IP 172.20.0.10
+reverse-proxy и ingress-proxy из proxy.yaml
+Проверка работы:
+
+```bash
+$ curl -L http://127.0.0.1:8090
+TIME: 2026-03-05 14:30:25, IP: 127.0.0.1
+```
+
+![1](screenshots/1.png)
+
+SQL-запрос:
 
 ```sql
-CREATE DATABASE example;
-CREATE USER 'app'@'localhost' IDENTIFIED BY 'very_strong';
-GRANT ALL PRIVILEGES ON example.* TO 'app'@'localhost';
-FLUSH PRIVILEGES;
+
+show databases;
+use virtd;
+show tables;
+SELECT * from requests LIMIT 10;
 ```
 
-## Доступные эндпоинты
+Результат: таблица requests создана, запись с IP и временем добавлена.
 
-- `GET /` - главная страница (записывает запрос в БД и возвращает время + IP)
-- `GET /requests` - просмотр всех записей из базы данных  
-- `GET /debug` - отладочная информация о заголовках запроса
-- `GET /docs` - автоматическая документация FastAPI (Swagger UI)
+### Задача 4: Деплой в Yandex Cloud
 
-## Переменные окружения
-
-| Переменная | Значение по умолчанию | Описание |
-|------------|----------------------|----------|
-| `DB_HOST` | `127.0.0.1` | Хост базы данных MySQL |
-| `DB_USER` | `app` | Пользователь БД |
-| `DB_PASSWORD` | `very_strong` | Пароль БД |
-| `DB_NAME` | `example` | Имя базы данных |
-
-## Проверка работы
+ВМ: docker-host (2 vCPU, 2 GB RAM, Ubuntu 22.04)
+Установка Docker:
 
 ```bash
-# При правильной настройке через прокси
-curl http://localhost:8090
+sudo apt-get install -y docker.io docker-compose-plugin
+```
+Скрипт deploy.sh:
 
-# При прямом обращении (НЕПРАВИЛЬНО) 
-curl http://localhost:5000  
-# Получите подсказку о том, что нужно использовать порт 8090
+```bash
+
+#!/bin/bash
+set -e
+cd /opt
+sudo rm -rf shvirtd-example-python
+sudo git clone https://github.com/dimirDin/shvirtd-example-python.git
+cd shvirtd-example-python
+sudo chown -R $USER:$USER .
+docker-compose up -d
 ```
 
-## Лицензия
+Проверка извне:
 
-Этот проект распространяется под лицензией MIT (подробности в файле `LICENSE`).
+```plain
+
+http://158.160.47.237:8090
+"TIME: 2026-03-15 17:17:21, IP: 80.234.77.93"
+```
+![2](screenshots/5.png)
+
+
+### Задача 6: Извлечение бинарника Terraform (dive + docker save)
+
+Шаги:
+Скачивание образа: docker pull hashicorp/terraform:latest
+Сохранение в tar: docker save hashicorp/terraform:latest -o terraform-image.tar
+Установка dive: wget ... && sudo dpkg -i dive_0.12.0_linux_amd64.deb
+Анализ образа: dive hashicorp/terraform:latest
+Распаковка tar: tar -xvf terraform-image.tar
+Поиск слоя с /bin/terraform в blobs/sha256/
+Извлечение бинарника
+
+![3](screenshots/6.png)
+![4](screenshots/7.png)
+
+
+### Задача 6.1: Извлечение через docker cp
+
+Команды:
+
+```bash
+docker pull hashicorp/terraform:latest
+docker create --name temp-terraform hashicorp/terraform:latest
+docker cp temp-terraform:/bin/terraform ./terraform
+docker rm temp-terraform
+./terraform version
+```
+
+Результат:
+
+```plain
+
+Terraform v1.14.7 on linux_amd64
+```
+
+![5](screenshots/8.png)
+
